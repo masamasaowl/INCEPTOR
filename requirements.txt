@@ -12,7 +12,8 @@ scipy==1.11.4
 # Machine Learning & Voice Recognition
 torch==2.1.2
 torchaudio==2.1.2
-speechbrain==0.5.16
+speechbrain==1.0.0
+huggingface-hub==0.20.0
 
 # Database
 sqlalchemy==2.0.25
