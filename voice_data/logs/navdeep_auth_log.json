@@ -1,26 +1,9 @@
 [
   {
     "username": "navdeep",
-    "timestamp": "2026-01-30T19:33:57.248199",
-    "similarity": 0.9996181383472696,
-    "threshold": 0.85,
-    "success": true,
-    "liveness_passed": true
-  },
-  {
-    "username": "navdeep",
-    "timestamp": "2026-01-30T19:34:50.357940",
-    "similarity": 0.9967695962378452,
-    "threshold": 0.85,
-    "success": true,
-    "liveness_passed": true
-  },
-  {
-    "username": "navdeep",
-    "timestamp": "2026-01-30T19:35:47.121945",
-    "similarity": 0.9891570925970204,
-    "threshold": 0.85,
-    "success": true,
-    "liveness_passed": true
-  }
-]
+    "timestamp": "2026-01-30T20:49:53.306704",
+    "similarity": 0.8697002378175146,
+    "cosine_sim": 0.957543047487524,
+    "euclidean_sim": 0.6647336819208265,
+    "threshold": 0.7648066304929836,
+    "success": 
