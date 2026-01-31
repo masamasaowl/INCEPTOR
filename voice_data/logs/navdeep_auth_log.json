@@ -1,9 +1,0 @@
-[
-  {
-    "username": "navdeep",
-    "timestamp": "2026-01-30T20:49:53.306704",
-    "similarity": 0.8697002378175146,
-    "cosine_sim": 0.957543047487524,
-    "euclidean_sim": 0.6647336819208265,
-    "threshold": 0.7648066304929836,
-    "success": 

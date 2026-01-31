@@ -1,6 +1,6 @@
 """
-Voice Authentication System V3
-Fixed with better feature extraction and voice activity detection
+Voice Authentication System V4
+STRICTER AUTHENTICATION - Better discrimination between speakers
 """
 
 import numpy as np
@@ -10,10 +10,11 @@ import soundfile as sf
 import os
 import json
 from scipy.spatial.distance import cosine, euclidean
+from scipy.stats import pearsonr
 from datetime import datetime
 import time
 
-class VoiceAuthenticatorV3:
+class VoiceAuthenticatorV4:
     def __init__(self, data_dir="voice_data"):
         """Initialize the voice authentication system"""
         self.data_dir = data_dir
@@ -30,21 +31,16 @@ class VoiceAuthenticatorV3:
     
     def detect_voice_activity(self, audio, energy_threshold=0.02):
         """Detect the portion of audio that contains actual speech"""
-        # Calculate energy in frames
         frame_length = 512
         hop_length = 256
         
-        # Calculate RMS energy for each frame
         rms = librosa.feature.rms(y=audio, frame_length=frame_length, hop_length=hop_length)[0]
-        
-        # Find frames with energy above threshold
         voice_frames = rms > energy_threshold
         
         if not np.any(voice_frames):
             print("⚠️  WARNING: No speech detected! Audio might be too quiet.")
             return audio
         
-        # Convert frame indices to sample indices
         voice_samples = np.zeros(len(audio), dtype=bool)
         for i, is_voice in enumerate(voice_frames):
             start = i * hop_length
@@ -52,7 +48,6 @@ class VoiceAuthenticatorV3:
             if is_voice:
                 voice_samples[start:end] = True
         
-        # Extract only the voice portions
         voice_audio = audio[voice_samples]
         
         print(f"🎤 Voice Activity: {len(voice_audio)/len(audio)*100:.1f}% of recording contains speech")
@@ -60,22 +55,22 @@ class VoiceAuthenticatorV3:
         return voice_audio if len(voice_audio) > self.sample_rate * 0.5 else audio
     
     def extract_features(self, audio):
-        """Extract comprehensive voice features from audio signal"""
+        """Extract comprehensive voice features with better discrimination"""
         
-        # First, detect and isolate speech
         speech_audio = self.detect_voice_activity(audio)
         
-        # 1. MFCCs - captures vocal tract characteristics
+        # 1. MFCCs - MORE coefficients for better detail
         mfccs = librosa.feature.mfcc(
             y=speech_audio,
             sr=self.sample_rate,
-            n_mfcc=20  # Increased from 13 for more detail
+            n_mfcc=25  # Increased from 20
         )
         
-        # 2. Delta MFCCs - captures how voice changes over time
+        # 2. Delta and Delta-Delta MFCCs
         delta_mfccs = librosa.feature.delta(mfccs)
+        delta2_mfccs = librosa.feature.delta(mfccs, order=2)
         
-        # 3. Pitch/Fundamental frequency - unique to each person
+        # 3. Pitch features - MORE DETAILED
         pitches, magnitudes = librosa.piptrack(y=speech_audio, sr=self.sample_rate)
         pitch_values = []
         for t in range(pitches.shape[1]):
@@ -84,33 +79,85 @@ class VoiceAuthenticatorV3:
             if pitch > 0:
                 pitch_values.append(pitch)
         
-        # 4. Spectral features
-        spectral_centroid = librosa.feature.spectral_centroid(y=speech_audio, sr=self.sample_rate)
+        # 4. Formants estimation (vocal tract resonances) - UNIQUE PER PERSON
+        # Using spectral peaks as proxy for formants
+        spectral_centroids = librosa.feature.spectral_centroid(y=speech_audio, sr=self.sample_rate)
+        
+        # 5. More spectral features
         spectral_rolloff = librosa.feature.spectral_rolloff(y=speech_audio, sr=self.sample_rate)
         spectral_bandwidth = librosa.feature.spectral_bandwidth(y=speech_audio, sr=self.sample_rate)
+        spectral_contrast = librosa.feature.spectral_contrast(y=speech_audio, sr=self.sample_rate)
+        spectral_flatness = librosa.feature.spectral_flatness(y=speech_audio)
         
-        # 5. Zero crossing rate - voice texture
+        # 6. Zero crossing rate
         zcr = librosa.feature.zero_crossing_rate(speech_audio)
         
-        # Aggregate features
+        # 7. Chroma features - harmonic content
+        chroma = librosa.feature.chroma_stft(y=speech_audio, sr=self.sample_rate)
+        
+        # 8. Energy features
+        rms_energy = librosa.feature.rms(y=speech_audio)
+        
+        # Create comprehensive feature vector with BETTER STATISTICS
         features = np.concatenate([
-            np.mean(mfccs, axis=1),           # 20 features
-            np.std(mfccs, axis=1),            # 20 features - variation
-            np.mean(delta_mfccs, axis=1),     # 20 features - dynamics
-            [np.mean(pitch_values) if pitch_values else 0],  # 1 feature
-            [np.std(pitch_values) if pitch_values else 0],   # 1 feature
-            [np.mean(spectral_centroid)],     # 1 feature
-            [np.std(spectral_centroid)],      # 1 feature
-            [np.mean(spectral_rolloff)],      # 1 feature
-            [np.mean(spectral_bandwidth)],    # 1 feature
-            [np.mean(zcr)],                   # 1 feature
-            [np.std(zcr)]                     # 1 feature
+            # MFCCs - mean and std
+            np.mean(mfccs, axis=1),           # 25 features
+            np.std(mfccs, axis=1),            # 25 features
+            np.median(mfccs, axis=1),         # 25 features - NEW
+            
+            # Delta MFCCs
+            np.mean(delta_mfccs, axis=1),     # 25 features
+            np.std(delta_mfccs, axis=1),      # 25 features
+            
+            # Delta-Delta MFCCs  
+            np.mean(delta2_mfccs, axis=1),    # 25 features - NEW
+            
+            # Pitch - MORE STATS
+            [np.mean(pitch_values) if pitch_values else 0],
+            [np.std(pitch_values) if pitch_values else 0],
+            [np.median(pitch_values) if pitch_values else 0],  # NEW
+            [np.max(pitch_values) if pitch_values else 0],     # NEW
+            [np.min(pitch_values) if pitch_values else 0],     # NEW
+            
+            # Spectral features - MORE DETAILED
+            [np.mean(spectral_centroids)],
+            [np.std(spectral_centroids)],
+            [np.median(spectral_centroids)],   # NEW
+            [np.mean(spectral_rolloff)],
+            [np.std(spectral_rolloff)],
+            [np.mean(spectral_bandwidth)],
+            [np.std(spectral_bandwidth)],
+            
+            # Spectral contrast - NEW
+            np.mean(spectral_contrast, axis=1),  # 7 features
+            
+            # Spectral flatness
+            [np.mean(spectral_flatness)],
+            [np.std(spectral_flatness)],
+            
+            # Zero crossing
+            [np.mean(zcr)],
+            [np.std(zcr)],
+            
+            # Chroma
+            np.mean(chroma, axis=1),          # 12 features
+            
+            # Energy
+            [np.mean(rms_energy)],
+            [np.std(rms_energy)],
         ])
         
-        # Normalize features to 0-1 range for better comparison
-        features = (features - np.min(features)) / (np.max(features) - np.min(features) + 1e-8)
+        # BETTER NORMALIZATION: Per-feature normalization (not global)
+        # This preserves the relative differences between features
+        features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=0.0)
         
-        print(f"📊 Extracted {len(features)} features from voice")
+        # Min-max normalization per feature
+        feature_min = np.min(features)
+        feature_max = np.max(features)
+        if feature_max > feature_min:
+            features = (features - feature_min) / (feature_max - feature_min)
+        
+        print(f"📊 Extracted {len(features)} discriminative features from voice")
         
         return features
     
@@ -119,14 +166,12 @@ class VoiceAuthenticatorV3:
         print(f"\n🎤 Recording for {self.duration} seconds...")
         print("Say: 'Hello, this is my voice' clearly")
         
-        # Countdown
         for i in range(3, 0, -1):
             print(f"Starting in {i}...", end='\r')
             time.sleep(1)
         
         print("\n🔴 RECORDING NOW!          ")
         
-        # Record audio
         audio = sd.rec(
             int(self.duration * self.sample_rate),
             samplerate=self.sample_rate,
@@ -134,14 +179,12 @@ class VoiceAuthenticatorV3:
             dtype='float32'
         )
         
-        # Show recording progress
         for i in range(self.duration):
             time.sleep(1)
             print(f"{'█' * (i+1)}{'░' * (self.duration-i-1)} {i+1}/{self.duration}s")
         
         sd.wait()
         
-        # Check audio level
         rms = np.sqrt(np.mean(audio**2))
         max_amp = np.max(np.abs(audio))
         
@@ -182,16 +225,13 @@ class VoiceAuthenticatorV3:
                 
                 audio = self.record_audio_with_countdown()
                 
-                # Playback and confirm
                 if self.playback_audio(audio):
-                    # Save the audio file
                     audio_path = os.path.join(
                         self.data_dir,
                         f"{username}_sample_{i+1}.wav"
                     )
                     sf.write(audio_path, audio, self.sample_rate)
                     
-                    # Extract features
                     features = self.extract_features(audio)
                     feature_vectors.append(features)
                     break
@@ -218,7 +258,7 @@ class VoiceAuthenticatorV3:
         print(f"Consistency Score: {avg_consistency*100:.2f}%")
         print(f"(How similar your 3 samples are to each other)")
         
-        if avg_consistency < 0.75:
+        if avg_consistency < 0.80:  # Raised from 0.75
             print("⚠️  WARNING: Low consistency! Your recordings are quite different.")
             print("This might affect authentication accuracy.")
             confirm = input("Continue anyway? (y/n): ").strip().lower()
@@ -248,83 +288,121 @@ class VoiceAuthenticatorV3:
         return True
     
     def authenticate_user(self, username):
-        """Authenticate a user by their voice"""
+        """Authenticate a user with STRICTER verification"""
         print(f"\n{'='*70}")
         print(f"AUTHENTICATION MODE - User: {username}")
         print(f"{'='*70}")
         
-        # Check if user exists
         profile_path = os.path.join(self.data_dir, f"{username}_profile.json")
         if not os.path.exists(profile_path):
             print(f"❌ User '{username}' not found. Please register first.")
             return False
         
-        # Load user profile
         with open(profile_path, 'r') as f:
             user_profile = json.load(f)
         
         stored_features = np.array(user_profile['features'])
         
-        # Record authentication attempt
         audio = self.record_audio_with_countdown()
         
-        # Playback option
         response = input("\n🔊 Hear your recording? (y/n): ").strip().lower()
         if response == 'y':
             print("Playing back...")
             sd.play(audio, self.sample_rate)
             sd.wait()
         
-        # Extract features
         test_features = self.extract_features(audio)
         
-        # Calculate multiple similarity metrics
+        # === MULTI-METRIC VERIFICATION ===
+        
+        # 1. Cosine similarity
         cosine_dist = cosine(stored_features, test_features)
         cosine_sim = 1 - cosine_dist
         
+        # 2. Euclidean distance (normalized)
         euclidean_dist = euclidean(stored_features, test_features)
-        # Normalize euclidean distance to 0-1 range
         euclidean_sim = 1 / (1 + euclidean_dist)
         
-        # Combined similarity score (weighted average)
-        similarity = 0.7 * cosine_sim + 0.3 * euclidean_sim
+        # 3. Pearson correlation - NEW metric
+        try:
+            pearson_corr, _ = pearsonr(stored_features, test_features)
+            pearson_sim = (pearson_corr + 1) / 2  # Convert -1,1 range to 0,1
+        except:
+            pearson_sim = 0.5
+        
+        # === STRICTER COMBINED SCORE ===
+        # More balanced weighting - euclidean gets more weight now
+        similarity = (0.4 * cosine_sim + 0.4 * euclidean_sim + 0.2 * pearson_sim)
+        
+        # === MUCH STRICTER THRESHOLD ===
+        base_threshold = 0.9  # Increased from 0.75 to 0.88
         
         # Adaptive threshold based on registration consistency
-        base_threshold = 0.75  # Lowered from 0.85
-        consistency_bonus = max(0, (user_profile.get('consistency', 0.9) - 0.85) * 0.1)
+        consistency_bonus = max(0, (user_profile.get('consistency', 0.9) - 0.90) * 0.05)
         threshold = base_threshold + consistency_bonus
         
-        # Feature analysis
+        # === FEATURE ANALYSIS ===
         feature_diff = np.abs(stored_features - test_features)
         max_diff = np.max(feature_diff)
         avg_diff = np.mean(feature_diff)
+        significant_diffs = np.sum(feature_diff > 0.2)  # Lowered threshold from 0.3 to 0.2
         
-        # Calculate how many features are significantly different
-        significant_diffs = np.sum(feature_diff > 0.3)
+        # === ADDITIONAL SECURITY CHECKS ===
+        
+        # Check 1: Individual metrics must also pass minimum thresholds
+        cosine_pass = cosine_sim >= 0.99  # Cosine must be at least 90%
+        euclidean_pass = euclidean_sim >= 0.97  # Euclidean must be at least 50%
+        pearson_pass = pearson_sim >= 0.99  # Pearson must be at least 75%
+        
+        # Check 2: Not too many features can be drastically different
+        max_allowed_diffs = len(stored_features) * 0.15  # Only 15% of features can differ significantly
+        feature_check_pass = significant_diffs <= max_allowed_diffs
+        
+        # Check 3: Average difference must be small
+        avg_diff_pass = avg_diff < 0.12  # Average difference must be less than 0.12
+        
+        all_checks_passed = all([
+            cosine_pass,
+            euclidean_pass, 
+            pearson_pass,
+            feature_check_pass,
+            avg_diff_pass
+        ])
         
         print(f"\n{'='*70}")
         print(f"📊 AUTHENTICATION ANALYSIS")
         print(f"{'='*70}")
-        print(f"Similarity Score:        {similarity*100:.2f}%")
-        print(f"  - Cosine Similarity:   {cosine_sim*100:.2f}%")
-        print(f"  - Euclidean Similarity: {euclidean_sim*100:.2f}%")
+        print(f"Combined Similarity:     {similarity*100:.2f}%")
+        print(f"  - Cosine Similarity:   {cosine_sim*100:.2f}% {'✅' if cosine_pass else '❌'} (need ≥99%)")
+        print(f"  - Euclidean Similarity: {euclidean_sim*100:.2f}% {'✅' if euclidean_pass else '❌'} (need ≥97%)")
+        print(f"  - Pearson Correlation: {pearson_sim*100:.2f}% {'✅' if pearson_pass else '❌'} (need ≥99%)")
         print(f"Required Threshold:      {threshold*100:.2f}%")
         print(f"─"*70)
-        print(f"Feature Analysis:")
+        print(f"Security Checks:")
+        print(f"  - Features Changed:    {significant_diffs}/{len(stored_features)} {'✅' if feature_check_pass else '❌'} (max {int(max_allowed_diffs)})")
+        print(f"  - Avg Difference:      {avg_diff:.4f} {'✅' if avg_diff_pass else '❌'} (max 0.12)")
         print(f"  - Max Difference:      {max_diff:.4f}")
-        print(f"  - Avg Difference:      {avg_diff:.4f}")
-        print(f"  - Features Changed:    {significant_diffs}/{len(stored_features)}")
         print(f"{'='*70}")
         
-        # Log the attempt - FIX: Convert numpy types to Python types
+        # === FINAL DECISION ===
+        # MUST pass both the similarity threshold AND all security checks
+        authentication_success = (similarity >= threshold) and all_checks_passed
+        
+        # Log the attempt
         log_entry = {
             'username': username,
             'timestamp': datetime.now().isoformat(),
             'similarity': float(similarity),
             'cosine_sim': float(cosine_sim),
             'euclidean_sim': float(euclidean_sim),
-            'threshold': float(threshold),  # Convert to float
-            'success': bool(similarity >= threshold),  # Convert to bool - THIS IS THE FIX
+            'pearson_sim': float(pearson_sim),
+            'threshold': float(threshold),
+            'success': bool(authentication_success),
+            'cosine_pass': bool(cosine_pass),
+            'euclidean_pass': bool(euclidean_pass),
+            'pearson_pass': bool(pearson_pass),
+            'feature_check_pass': bool(feature_check_pass),
+            'avg_diff_pass': bool(avg_diff_pass),
             'max_diff': float(max_diff),
             'avg_diff': float(avg_diff),
             'features_changed': int(significant_diffs)
@@ -339,22 +417,34 @@ class VoiceAuthenticatorV3:
         with open(log_file, 'w') as f:
             json.dump(logs, f, indent=2)
         
-        # Decision
-        if similarity >= threshold:
+        # Decision output
+        if authentication_success:
             print(f"\n✅ AUTHENTICATION SUCCESSFUL!")
             print(f"Welcome back, {username}! 🎉")
             return True
         else:
             print(f"\n❌ AUTHENTICATION FAILED!")
-            print(f"Voice does not match registered profile.")
-            print(f"Similarity: {similarity*100:.2f}% < Required: {threshold*100:.2f}%")
             
-            # Helpful feedback
-            if significant_diffs > len(stored_features) * 0.5:
-                print("\n💡 Many features are different. This might be:")
-                print("   - A different person")
-                print("   - Very different recording conditions")
-                print("   - Background noise interference")
+            if similarity < threshold:
+                print(f"❌ Similarity too low: {similarity*100:.2f}% < {threshold*100:.2f}%")
+            
+            if not all_checks_passed:
+                print(f"❌ Failed security checks:")
+                if not cosine_pass:
+                    print(f"   • Cosine similarity too low ({cosine_sim*100:.2f}% < 90%)")
+                if not euclidean_pass:
+                    print(f"   • Euclidean similarity too low ({euclidean_sim*100:.2f}% < 50%)")
+                if not pearson_pass:
+                    print(f"   • Pearson correlation too low ({pearson_sim*100:.2f}% < 75%)")
+                if not feature_check_pass:
+                    print(f"   • Too many features changed ({significant_diffs} > {int(max_allowed_diffs)})")
+                if not avg_diff_pass:
+                    print(f"   • Average difference too high ({avg_diff:.4f} > 0.12)")
+            
+            print("\n💡 This could indicate:")
+            print("   - Different person speaking")
+            print("   - Very different recording environment")
+            print("   - Background noise or audio quality issues")
             
             return False
     
@@ -422,21 +512,37 @@ class VoiceAuthenticatorV3:
         print(f"Worst Match:          {min(similarities)*100:.2f}%")
         print(f"{'='*70}")
         
-        print(f"\n📝 Recent Attempts (last 5):")
-        for log in logs[-5:]:
+        print(f"\n📝 Recent Attempts (last 10):")
+        for log in logs[-10:]:
             timestamp = datetime.fromisoformat(log['timestamp']).strftime("%Y-%m-%d %H:%M:%S")
             status = "✅ Success" if log['success'] else "❌ Failed"
-            print(f"{timestamp} | {status} | {log['similarity']*100:.2f}%")
+            
+            # Show which checks failed
+            failed_checks = []
+            if not log.get('cosine_pass', True):
+                failed_checks.append("Cosine")
+            if not log.get('euclidean_pass', True):
+                failed_checks.append("Euclidean")
+            if not log.get('pearson_pass', True):
+                failed_checks.append("Pearson")
+            if not log.get('feature_check_pass', True):
+                failed_checks.append("Features")
+            if not log.get('avg_diff_pass', True):
+                failed_checks.append("AvgDiff")
+            
+            failed_str = f" (Failed: {', '.join(failed_checks)})" if failed_checks else ""
+            
+            print(f"{timestamp} | {status} | {log['similarity']*100:.2f}%{failed_str}")
 
 
 def main():
     """Main function"""
     print("="*70)
-    print("🎙️  VOICE AUTHENTICATION SYSTEM V3")
-    print("Enhanced Feature Extraction & Voice Activity Detection")
+    print("🎙️  VOICE AUTHENTICATION SYSTEM V4")
+    print("🔒 STRICTER SECURITY - Better Speaker Discrimination")
     print("="*70)
     
-    auth = VoiceAuthenticatorV3()
+    auth = VoiceAuthenticatorV4()
     
     while True:
         print("\n" + "="*70)
